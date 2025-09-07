@@ -1,4 +1,4 @@
-Test Journal Files Created: Sun Sep  7 19:02:48 UTC 2025
+Test Journal Files Created: Sun Sep  7 20:21:22 UTC 2025
 
 === EXPECTED TEST DATA ===
 
@@ -18,15 +18,15 @@ Error Scenarios:
   Messages: Various error and warning messages (priorities 1-4)
 
 === FILES CREATED ===
--rw-rw-r-- 1 josh josh    1289 Sep  7 19:02 /home/josh/journald-query/test_journald_files/error_scenarios.journal
+-rw-r--r-- 1 josh josh    1289 Sep  7 20:21 /home/josh/journald-query/test_journald_files/error_scenarios.journal
 -rw-rw-r-- 1 josh josh    1289 Sep  7 18:54 /home/josh/journald-query/test_journald_files/errors.export
--rw-r----- 1 josh josh 8388608 Sep  7 19:02 /home/josh/journald-query/test_journald_files/errors.journal
+-rw-r--r-- 1 josh josh 8388608 Sep  7 20:21 /home/josh/journald-query/test_journald_files/errors.journal
 -rw-rw-r-- 1 josh josh    2214 Sep  7 18:54 /home/josh/journald-query/test_journald_files/multi_host.export
--rw-r----- 1 josh josh 8388608 Sep  7 19:02 /home/josh/journald-query/test_journald_files/multi_host.journal
--rw-rw-r-- 1 josh josh    2214 Sep  7 19:02 /home/josh/journald-query/test_journald_files/multi_host_multi_unit.journal
+-rw-r--r-- 1 josh josh 8388608 Sep  7 20:21 /home/josh/journald-query/test_journald_files/multi_host.journal
+-rw-r--r-- 1 josh josh    2214 Sep  7 20:21 /home/josh/journald-query/test_journald_files/multi_host_multi_unit.journal
 -rw-rw-r-- 1 josh josh    1792 Sep  7 18:54 /home/josh/journald-query/test_journald_files/single_host.export
--rw-r----- 1 josh josh 8388608 Sep  7 19:02 /home/josh/journald-query/test_journald_files/single_host.journal
--rw-rw-r-- 1 josh josh    1792 Sep  7 19:02 /home/josh/journald-query/test_journald_files/single_host_many_units.journal
+-rw-r--r-- 1 josh josh 8388608 Sep  7 20:21 /home/josh/journald-query/test_journald_files/single_host.journal
+-rw-r--r-- 1 josh josh    1792 Sep  7 20:21 /home/josh/journald-query/test_journald_files/single_host_many_units.journal
 
 === USAGE ===
 For Rust API testing:
