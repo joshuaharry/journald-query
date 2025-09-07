@@ -26,6 +26,8 @@ pub enum JournalError {
     BadMessage,
     /// I/O error occurred
     IoError,
+    /// Data contains invalid UTF-8
+    InvalidData,
     /// Unknown error code from systemd
     Unknown(i32),
 }
@@ -62,6 +64,7 @@ impl fmt::Display for JournalError {
             JournalError::ProtocolNotSupported => write!(f, "Unsupported compression or feature"),
             JournalError::BadMessage => write!(f, "Journal is corrupted"),
             JournalError::IoError => write!(f, "I/O error occurred"),
+            JournalError::InvalidData => write!(f, "Data contains invalid UTF-8"),
             JournalError::Unknown(code) => write!(f, "Unknown error code: {}", code),
         }
     }

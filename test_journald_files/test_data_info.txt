@@ -1,0 +1,14 @@
+Test Journal Files Created: Sun Sep  7 18:52:05 UTC 2025
+
+Expected Test Data:
+- Hosts: web-server, database-server, monitoring-server, localhost
+- Units: nginx.service, apache2.service, postgresql.service, mysql.service, prometheus.service, alertmanager.service, grafana.service, systemd.service, NetworkManager.service, sshd.service, cron.service, docker.service, systemd-logind.service, systemd-resolved.service, failing.service, broken.service, disk-monitor.service, memory-monitor.service, auto-restart.service
+
+Files:
+-rw-rw-r-- 1 josh josh     0 Sep  7 18:52 /home/josh/journald-query/test_journald_files/test_nginx.journal
+-rw-rw-r-- 1 josh josh     0 Sep  7 18:52 /home/josh/journald-query/test_journald_files/test_postgresql.journal
+-rw-rw-r-- 1 josh josh 19352 Sep  7 18:52 /home/josh/journald-query/test_journald_files/test_recent.journal
+
+Usage:
+- Use journalctl -D "/home/josh/journald-query/test_journald_files" to read these files
+- Use our Rust API with Journal::open_directory("/home/josh/journald-query/test_journald_files")

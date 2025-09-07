@@ -35,7 +35,8 @@ impl Journal {
     /// # Ok::<(), journald_query::JournalError>(())
     /// ```
     pub fn open_directory<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path_cstr = CString::new(path.as_ref().to_string_lossy().as_ref())
+        let path_str = path.as_ref().to_string_lossy().into_owned();
+        let path_cstr = CString::new(path_str)
             .map_err(|_| JournalError::InvalidArgument)?;
         
         let mut handle: *mut ffi::SdJournal = ptr::null_mut();
@@ -44,7 +45,62 @@ impl Journal {
             ffi::sd_journal_open_directory(
                 &mut handle,
                 path_cstr.as_ptr(),
-                ffi::flags::SD_JOURNAL_LOCAL_ONLY,
+                0, // Try with no flags first
+            )
+        };
+        
+        if result < 0 {
+            return Err(JournalError::from_errno(result));
+        }
+        
+        if handle.is_null() {
+            return Err(JournalError::Unknown(-1));
+        }
+        
+        Ok(Journal {
+            handle,
+            _not_thread_safe: PhantomData,
+        })
+    }
+
+    /// Open specific journal files
+    /// 
+    /// # Arguments
+    /// * `file_paths` - Vector of paths to journal files to open
+    /// 
+    /// # Returns
+    /// A new Journal instance on success
+    /// 
+    /// # Examples
+    /// ```no_run
+    /// use journald_query::Journal;
+    /// 
+    /// let journal = Journal::open_files(vec!["test.journal"])?;
+    /// # Ok::<(), journald_query::JournalError>(())
+    /// ```
+    pub fn open_files<P: AsRef<Path>>(file_paths: Vec<P>) -> Result<Self> {
+        // Convert paths to C strings
+        let c_strings: std::result::Result<Vec<CString>, _> = file_paths
+            .iter()
+            .map(|p| CString::new(p.as_ref().to_string_lossy().as_ref()))
+            .collect();
+        
+        let c_strings = c_strings.map_err(|_| JournalError::InvalidArgument)?;
+        
+        // Create array of C string pointers, null-terminated
+        let mut c_ptrs: Vec<*const std::os::raw::c_char> = c_strings
+            .iter()
+            .map(|cs| cs.as_ptr())
+            .collect();
+        c_ptrs.push(ptr::null()); // Null terminate the array
+        
+        let mut handle: *mut ffi::SdJournal = ptr::null_mut();
+        
+        let result = unsafe {
+            ffi::sd_journal_open_files(
+                &mut handle,
+                c_ptrs.as_ptr(),
+                0, // Documentation says flags must be 0 for sd_journal_open_files
             )
         };
         
@@ -181,6 +237,249 @@ impl Journal {
         
         Ok(values)
     }
+
+    /// Add a match filter to the journal
+    /// 
+    /// This filters journal entries to only include those with the specified field value.
+    /// Multiple matches can be added - they work as AND conditions for different fields,
+    /// and OR conditions for the same field.
+    /// 
+    /// # Arguments
+    /// * `field` - Field name (e.g., "_HOSTNAME")
+    /// * `value` - Value to match (e.g., "localhost")
+    /// 
+    /// # Examples
+    /// ```no_run
+    /// # use journald_query::Journal;
+    /// # let journal = Journal::open_directory("/var/log/journal")?;
+    /// journal.add_match("_HOSTNAME", "localhost")?;
+    /// journal.add_match("_SYSTEMD_UNIT", "sshd.service")?;
+    /// # Ok::<(), journald_query::JournalError>(())
+    /// ```
+    pub fn add_match(&self, field: &str, value: &str) -> Result<()> {
+        let match_string = format!("{}={}", field, value);
+        let match_cstr = CString::new(match_string)
+            .map_err(|_| JournalError::InvalidArgument)?;
+        
+        // Calculate the actual size: length of FIELD + 1 (for '=') + length of value
+        // The CString::as_bytes() gives us the bytes without the null terminator
+        let size = match_cstr.as_bytes().len();
+        
+        let result = unsafe {
+            ffi::sd_journal_add_match(
+                self.handle,
+                match_cstr.as_ptr() as *const std::os::raw::c_void,
+                size,
+            )
+        };
+        
+        if result < 0 {
+            return Err(JournalError::from_errno(result));
+        }
+        
+        Ok(())
+    }
+
+    /// Clear all match filters
+    /// 
+    /// After calling this, all journal entries will be available for iteration.
+    /// 
+    /// # Examples
+    /// ```no_run
+    /// # use journald_query::Journal;
+    /// # let journal = Journal::open_directory("/var/log/journal")?;
+    /// journal.add_match("_HOSTNAME", "localhost")?;
+    /// journal.flush_matches(); // Clear the filter
+    /// # Ok::<(), journald_query::JournalError>(())
+    /// ```
+    pub fn flush_matches(&self) {
+        unsafe {
+            ffi::sd_journal_flush_matches(self.handle);
+        }
+    }
+
+    /// Seek to the beginning of the journal
+    /// 
+    /// This positions the read pointer before the first entry.
+    /// Call `next()` to advance to the first entry.
+    /// 
+    /// # Examples
+    /// ```no_run
+    /// # use journald_query::Journal;
+    /// # let journal = Journal::open_directory("/var/log/journal")?;
+    /// journal.seek_head()?;
+    /// # Ok::<(), journald_query::JournalError>(())
+    /// ```
+    pub fn seek_head(&self) -> Result<()> {
+        let result = unsafe {
+            ffi::sd_journal_seek_head(self.handle)
+        };
+        
+        if result < 0 {
+            return Err(JournalError::from_errno(result));
+        }
+        
+        Ok(())
+    }
+
+    /// Advance to the next journal entry
+    /// 
+    /// Returns `true` if there is a next entry, `false` if at the end.
+    /// 
+    /// # Examples
+    /// ```no_run
+    /// # use journald_query::Journal;
+    /// # let journal = Journal::open_directory("/var/log/journal")?;
+    /// journal.seek_head()?;
+    /// while journal.next()? {
+    ///     // Process entry
+    /// }
+    /// # Ok::<(), journald_query::JournalError>(())
+    /// ```
+    pub fn next(&self) -> Result<bool> {
+        let result = unsafe {
+            ffi::sd_journal_next(self.handle)
+        };
+        
+        if result < 0 {
+            return Err(JournalError::from_errno(result));
+        }
+        
+        Ok(result > 0)
+    }
+
+    /// Get data for a specific field from the current journal entry
+    /// 
+    /// The journal read pointer must be positioned at a valid entry (after calling `next()`).
+    /// 
+    /// # Arguments
+    /// * `field` - Field name to retrieve (e.g., "_HOSTNAME", "_SYSTEMD_UNIT")
+    /// 
+    /// # Returns
+    /// The field data as a string, or None if the field is not present in this entry
+    /// 
+    /// # Examples
+    /// ```no_run
+    /// # use journald_query::Journal;
+    /// # let journal = Journal::open_directory("/var/log/journal")?;
+    /// journal.seek_head()?;
+    /// if journal.next()? {
+    ///     if let Some(hostname) = journal.get_field("_HOSTNAME")? {
+    ///         println!("Hostname: {}", hostname);
+    ///     }
+    /// }
+    /// # Ok::<(), journald_query::JournalError>(())
+    /// ```
+    pub fn get_field(&self, field: &str) -> Result<Option<String>> {
+        let field_cstr = CString::new(field)
+            .map_err(|_| JournalError::InvalidArgument)?;
+        
+        let mut data: *const std::os::raw::c_void = ptr::null();
+        let mut length: usize = 0;
+        
+        let result = unsafe {
+            ffi::sd_journal_get_data(
+                self.handle,
+                field_cstr.as_ptr(),
+                &mut data,
+                &mut length,
+            )
+        };
+        
+        if result == -libc::ENOENT {
+            return Ok(None); // Field not found in this entry
+        }
+        
+        if result < 0 {
+            return Err(JournalError::from_errno(result));
+        }
+        
+        // Convert the raw data to a string
+        let data_slice = unsafe {
+            std::slice::from_raw_parts(data as *const u8, length)
+        };
+        
+        let data_str = std::str::from_utf8(data_slice)
+            .map_err(|_| JournalError::InvalidData)?;
+        
+        Ok(Some(data_str.to_string()))
+    }
+
+    /// Seek to a specific timestamp in the journal
+    /// 
+    /// This method positions the journal cursor at or near the specified
+    /// realtime timestamp. The timestamp is in microseconds since Unix epoch.
+    /// 
+    /// # Arguments
+    /// * `timestamp_usec` - Timestamp in microseconds since Unix epoch
+    /// 
+    /// # Returns
+    /// Ok(()) on success
+    /// 
+    /// # Examples
+    /// ```no_run
+    /// use journald_query::Journal;
+    /// 
+    /// let journal = Journal::open_directory("/var/log/journal")?;
+    /// 
+    /// // Seek to January 1, 2022 00:00:00 UTC
+    /// let timestamp = 1640995200000000; // microseconds since epoch
+    /// journal.seek_realtime_usec(timestamp)?;
+    /// 
+    /// // Now iterate from that point
+    /// while journal.next()? {
+    ///     // Process entries from that timestamp onward
+    ///     break;
+    /// }
+    /// # Ok::<(), journald_query::JournalError>(())
+    /// ```
+    pub fn seek_realtime_usec(&self, timestamp_usec: u64) -> Result<()> {
+        let result = unsafe {
+            ffi::sd_journal_seek_realtime_usec(self.handle, timestamp_usec)
+        };
+        
+        if result < 0 {
+            return Err(JournalError::from_errno(result));
+        }
+        
+        Ok(())
+    }
+
+    /// Get the realtime timestamp of the current journal entry
+    /// 
+    /// This method retrieves the wallclock timestamp of the current journal entry
+    /// in microseconds since Unix epoch.
+    /// 
+    /// # Returns
+    /// The timestamp in microseconds since Unix epoch
+    /// 
+    /// # Examples
+    /// ```no_run
+    /// use journald_query::Journal;
+    /// 
+    /// let journal = Journal::open_directory("/var/log/journal")?;
+    /// journal.seek_head()?;
+    /// 
+    /// while journal.next()? {
+    ///     let timestamp = journal.get_realtime_usec()?;
+    ///     println!("Entry timestamp: {} microseconds since epoch", timestamp);
+    ///     break;
+    /// }
+    /// # Ok::<(), journald_query::JournalError>(())
+    /// ```
+    pub fn get_realtime_usec(&self) -> Result<u64> {
+        let mut timestamp: u64 = 0;
+        
+        let result = unsafe {
+            ffi::sd_journal_get_realtime_usec(self.handle, &mut timestamp)
+        };
+        
+        if result < 0 {
+            return Err(JournalError::from_errno(result));
+        }
+        
+        Ok(timestamp)
+    }
 }
 
 impl Drop for Journal {
@@ -226,5 +525,32 @@ mod tests {
         // Test error conversion
         let err = JournalError::from_errno(-libc::EINVAL);
         assert_eq!(err, JournalError::InvalidArgument);
+    }
+
+    #[test]
+    fn test_match_string_size_calculation() {
+        // Test that our size calculation matches the expected format
+        let field = "_HOSTNAME";
+        let value = "localhost";
+        let match_string = format!("{}={}", field, value);
+        let match_cstr = CString::new(match_string).unwrap();
+        
+        // Expected size: length of "_HOSTNAME" + 1 (for '=') + length of "localhost"
+        let expected_size = field.len() + 1 + value.len();
+        let actual_size = match_cstr.as_bytes().len();
+        
+        assert_eq!(actual_size, expected_size);
+        
+        // "_HOSTNAME=localhost"
+        // _HOSTNAME = 9 chars
+        // = = 1 char  
+        // localhost = 9 chars
+        // Total = 19 chars
+        assert_eq!(actual_size, 19);
+        
+        // Verify the actual content
+        let expected_content = "_HOSTNAME=localhost";
+        assert_eq!(match_cstr.to_str().unwrap(), expected_content);
+        assert_eq!(expected_content.len(), 19);
     }
 }

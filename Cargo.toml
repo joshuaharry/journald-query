@@ -1,6 +1,25 @@
 [package]
-name = "sdjournal-rs"
+name = "journald-query"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+authors = ["Josh"]
+description = "Safe Rust bindings for systemd journal API"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/josh/journald-query"
 
 [dependencies]
+libc = { version = "0.2", features = ["use_std"] }
+
+[build-dependencies]
+# No build dependencies needed for now
+
+[dev-dependencies]
+# Add test dependencies here when needed
+
+# Link against libsystemd
+[package.metadata.pkg-config]
+libsystemd = ">=240"
+
+[[example]]
+name = "discover_services"
+path = "examples/discover_services.rs"

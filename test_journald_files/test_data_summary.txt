@@ -1,0 +1,41 @@
+Test Journal Files Created: Sun Sep  7 19:02:48 UTC 2025
+
+=== EXPECTED TEST DATA ===
+
+Multi-Host Multi-Unit Scenario:
+  Hosts: web-server, database-server, monitoring-server
+  Units: nginx.service, apache2.service, postgresql.service, mysql.service, prometheus.service, grafana.service
+  Messages: Various startup and operational messages
+
+Single-Host Many-Units Scenario:
+  Hosts: localhost
+  Units: systemd.service, NetworkManager.service, sshd.service, docker.service, cron.service, systemd-logind.service
+  Messages: System boot and service startup messages
+
+Error Scenarios:
+  Hosts: error-prone-server, disk-full-server, memory-constrained-server
+  Units: failing.service, broken.service, disk-monitor.service, memory-monitor.service
+  Messages: Various error and warning messages (priorities 1-4)
+
+=== FILES CREATED ===
+-rw-rw-r-- 1 josh josh    1289 Sep  7 19:02 /home/josh/journald-query/test_journald_files/error_scenarios.journal
+-rw-rw-r-- 1 josh josh    1289 Sep  7 18:54 /home/josh/journald-query/test_journald_files/errors.export
+-rw-r----- 1 josh josh 8388608 Sep  7 19:02 /home/josh/journald-query/test_journald_files/errors.journal
+-rw-rw-r-- 1 josh josh    2214 Sep  7 18:54 /home/josh/journald-query/test_journald_files/multi_host.export
+-rw-r----- 1 josh josh 8388608 Sep  7 19:02 /home/josh/journald-query/test_journald_files/multi_host.journal
+-rw-rw-r-- 1 josh josh    2214 Sep  7 19:02 /home/josh/journald-query/test_journald_files/multi_host_multi_unit.journal
+-rw-rw-r-- 1 josh josh    1792 Sep  7 18:54 /home/josh/journald-query/test_journald_files/single_host.export
+-rw-r----- 1 josh josh 8388608 Sep  7 19:02 /home/josh/journald-query/test_journald_files/single_host.journal
+-rw-rw-r-- 1 josh josh    1792 Sep  7 19:02 /home/josh/journald-query/test_journald_files/single_host_many_units.journal
+
+=== USAGE ===
+For Rust API testing:
+  Journal::open_directory("/home/josh/journald-query/test_journald_files")
+
+For manual verification:
+  journalctl --file="/home/josh/journald-query/test_journald_files/filename.journal"
+
+=== EXPECTED UNIQUE VALUES ===
+Hosts (_HOSTNAME): web-server, database-server, monitoring-server, localhost, error-prone-server, disk-full-server, memory-constrained-server
+
+Units (_SYSTEMD_UNIT): nginx.service, apache2.service, postgresql.service, mysql.service, prometheus.service, grafana.service, systemd.service, NetworkManager.service, sshd.service, docker.service, cron.service, systemd-logind.service, failing.service, broken.service, disk-monitor.service, memory-monitor.service
