@@ -60,6 +60,40 @@ unsafe extern "C" {
         j: *mut SdJournal,
         usec: *mut u64,
     ) -> c_int;
+
+    /// Seek to the end of the journal (most recent entry)
+    /// 
+    /// This positions the journal cursor after the most recent available entry.
+    /// A subsequent call to sd_journal_next() will return 0 (no more entries)
+    /// unless new entries are added to the journal.
+    /// 
+    /// Returns 0 on success or a negative errno-style error code.
+    #[allow(dead_code)]
+    pub fn sd_journal_seek_tail(j: *mut SdJournal) -> c_int;
+
+    /// Wait for changes to the journal
+    /// 
+    /// This function synchronously waits until the journal gets changed. The maximum
+    /// time this call sleeps may be controlled with the timeout_usec parameter.
+    /// Pass (uint64_t) -1 to wait indefinitely.
+    /// 
+    /// Returns:
+    /// - SD_JOURNAL_NOP: journal did not change since last invocation
+    /// - SD_JOURNAL_APPEND: new entries have been appended to the end
+    /// - SD_JOURNAL_INVALIDATE: journal files were added/removed (rotation/vacuuming)
+    /// - negative errno-style error code on failure
+    #[allow(dead_code)]
+    pub fn sd_journal_wait(j: *mut SdJournal, timeout_usec: u64) -> c_int;
+
+    /// Process pending journal changes (non-blocking)
+    /// 
+    /// This function processes any pending changes to the journal that were detected
+    /// via the file descriptor returned by sd_journal_get_fd(). This is the 
+    /// non-blocking alternative to sd_journal_wait().
+    /// 
+    /// Returns the same values as sd_journal_wait().
+    #[allow(dead_code)]
+    pub fn sd_journal_process(j: *mut SdJournal) -> c_int;
 }
 
 /// Journal open flags
@@ -78,6 +112,22 @@ pub mod flags {
     /// Treat path as OS root
     #[allow(dead_code)]
     pub const SD_JOURNAL_OS_ROOT: c_int = 16;
+}
+
+/// Journal wait/process result constants
+pub mod wait_result {
+    use std::os::raw::c_int;
+
+    /// Journal did not change since last invocation
+    #[allow(dead_code)]
+    pub const SD_JOURNAL_NOP: c_int = 0;
+    /// New entries have been appended to the end of the journal
+    #[allow(dead_code)]
+    pub const SD_JOURNAL_APPEND: c_int = 1;
+    /// Journal files were added/removed (rotation, vacuuming, etc.)
+    /// This means entries might have appeared or disappeared at arbitrary places
+    #[allow(dead_code)]
+    pub const SD_JOURNAL_INVALIDATE: c_int = 2;
 }
 
 #[cfg(test)]
@@ -120,6 +170,12 @@ mod tests {
             sd_journal_seek_realtime_usec;
         let _get_realtime_fn: unsafe extern "C" fn(*mut SdJournal, *mut u64) -> c_int = 
             sd_journal_get_realtime_usec;
+        let _seek_tail_fn: unsafe extern "C" fn(*mut SdJournal) -> c_int = 
+            sd_journal_seek_tail;
+        let _wait_fn: unsafe extern "C" fn(*mut SdJournal, u64) -> c_int = 
+            sd_journal_wait;
+        let _process_fn: unsafe extern "C" fn(*mut SdJournal) -> c_int = 
+            sd_journal_process;
 
         // Verify we can create the types we need
         let _: *mut *mut SdJournal = journal_ptr_ptr;
@@ -135,6 +191,14 @@ mod tests {
         assert_eq!(flags::SD_JOURNAL_SYSTEM, 4);
         assert_eq!(flags::SD_JOURNAL_CURRENT_USER, 8);
         assert_eq!(flags::SD_JOURNAL_OS_ROOT, 16);
+    }
+
+    #[test]
+    fn test_wait_result_constants() {
+        // Verify wait result constants have expected values (from systemd source)
+        assert_eq!(wait_result::SD_JOURNAL_NOP, 0);
+        assert_eq!(wait_result::SD_JOURNAL_APPEND, 1);
+        assert_eq!(wait_result::SD_JOURNAL_INVALIDATE, 2);
     }
 
     #[test]
@@ -214,5 +278,67 @@ mod tests {
         let end_time = start_time + (24 * 60 * 60 * 1_000_000); // Add 24 hours in microseconds
         assert!(end_time > start_time);
         assert_eq!(end_time - start_time, 86400000000); // 24 hours in microseconds
+    }
+
+    #[test]
+    fn test_live_tailing_function_signatures() {
+        // Test that live tailing functions have correct signatures
+        
+        let journal_ptr: *mut SdJournal = ptr::null_mut();
+        let timeout: u64 = 5000000; // 5 seconds in microseconds
+        let infinite_timeout: u64 = u64::MAX; // (uint64_t) -1
+        
+        // Verify function pointer types for live tailing operations
+        let _seek_tail_fn: unsafe extern "C" fn(*mut SdJournal) -> c_int = 
+            sd_journal_seek_tail;
+        let _wait_fn: unsafe extern "C" fn(*mut SdJournal, u64) -> c_int = 
+            sd_journal_wait;
+        let _process_fn: unsafe extern "C" fn(*mut SdJournal) -> c_int = 
+            sd_journal_process;
+        
+        // Verify we can create the types needed for live tailing
+        let _: *mut SdJournal = journal_ptr;
+        let _: u64 = timeout;
+        let _: u64 = infinite_timeout;
+        
+        // Test that we can handle different timeout values
+        let _no_timeout: u64 = 0;
+        let _short_timeout: u64 = 1000; // 1ms in microseconds
+        let _long_timeout: u64 = 3600000000; // 1 hour in microseconds
+        
+        // Verify return value handling for different wait results
+        let _nop_result: c_int = wait_result::SD_JOURNAL_NOP;
+        let _append_result: c_int = wait_result::SD_JOURNAL_APPEND;
+        let _invalidate_result: c_int = wait_result::SD_JOURNAL_INVALIDATE;
+        
+        assert_eq!(_nop_result, 0);
+        assert_eq!(_append_result, 1);
+        assert_eq!(_invalidate_result, 2);
+    }
+
+    #[test]
+    fn test_timeout_value_handling() {
+        // Test that we can properly handle different timeout values for sd_journal_wait
+        
+        // Test common timeout patterns
+        let no_wait: u64 = 0;
+        let one_second: u64 = 1_000_000; // 1 second in microseconds
+        let one_minute: u64 = 60_000_000; // 1 minute in microseconds
+        let infinite: u64 = u64::MAX; // (uint64_t) -1 for infinite wait
+        
+        // Verify these are valid u64 values
+        assert_eq!(no_wait, 0);
+        assert!(one_second > 0);
+        assert!(one_minute > one_second);
+        assert_eq!(infinite, u64::MAX);
+        
+        // Test arithmetic for timeout calculations
+        let base_timeout = 5_000_000; // 5 seconds
+        let extended_timeout = base_timeout * 2;
+        assert_eq!(extended_timeout, 10_000_000); // 10 seconds
+        
+        // Verify we can detect infinite timeout
+        assert_eq!(infinite, u64::MAX);
+        assert_ne!(base_timeout, u64::MAX);
     }
 }

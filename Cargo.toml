@@ -14,7 +14,14 @@ libc = { version = "0.2", features = ["use_std"] }
 # No build dependencies needed for now
 
 [dev-dependencies]
-# Add test dependencies here when needed
+poem = { version = "3.1.12", features = ["sse"] }
+tokio = { version = "1.47.1", features = ["rt-multi-thread"] }
+tokio-stream = { version = "0.1.17" }
+futures-util = { version = "0.3.31" }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.143" }
+async-stream = { version = "0.3.6" }
+
 
 # Link against libsystemd
 [package.metadata.pkg-config]
