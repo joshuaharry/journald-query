@@ -44,6 +44,9 @@ unsafe extern "C" {
 
     pub fn sd_journal_next(j: *mut SdJournal) -> c_int;
 
+    #[allow(dead_code)]
+    pub fn sd_journal_previous(j: *mut SdJournal) -> c_int;
+
     pub fn sd_journal_get_data(
         j: *mut SdJournal,
         field: *const c_char,
@@ -94,6 +97,28 @@ unsafe extern "C" {
     /// Returns the same values as sd_journal_wait().
     #[allow(dead_code)]
     pub fn sd_journal_process(j: *mut SdJournal) -> c_int;
+
+    /// Get file descriptor for journal monitoring
+    /// 
+    /// Returns a file descriptor that can be used with poll() or select() to monitor
+    /// for journal changes. Use sd_journal_process() to process changes when the
+    /// file descriptor becomes ready.
+    #[allow(dead_code)]
+    pub fn sd_journal_get_fd(j: *mut SdJournal) -> c_int;
+
+    /// Get events to monitor for journal changes
+    /// 
+    /// Returns the events (POLLIN, etc.) that should be monitored on the file
+    /// descriptor returned by sd_journal_get_fd().
+    #[allow(dead_code)]
+    pub fn sd_journal_get_events(j: *mut SdJournal) -> c_int;
+
+    /// Get timeout for journal monitoring
+    /// 
+    /// Returns the timeout in microseconds that should be used when polling
+    /// the journal file descriptor. Returns 0 if no timeout is needed.
+    #[allow(dead_code)]
+    pub fn sd_journal_get_timeout(j: *mut SdJournal, timeout_usec: *mut u64) -> c_int;
 }
 
 /// Journal open flags

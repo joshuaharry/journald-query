@@ -170,8 +170,6 @@ async fn logs(Query(params): Query<LogsQuery>) -> Result<SSE, poem::Error> {
     let journal_path = format!("/var/log/journal/{}", machine_id);
     
     // Create tail configuration - use system journal for live demo
-    println!("DEBUG: Using journal path: {}", journal_path);
-    println!("DEBUG: Hostname: {}, Service: {}", params.hostname, params.service);
     let config = TailConfig::new(&params.hostname, &params.service, &journal_path);
     
     // Convert the blocking iterator to an async stream
@@ -182,26 +180,20 @@ async fn logs(Query(params): Query<LogsQuery>) -> Result<SSE, poem::Error> {
         // Spawn blocking task to handle journal iteration
         let _handle = tokio::task::spawn_blocking(move || {
             // Create the journal tail inside the blocking task
-            println!("DEBUG: Creating JournalTail...");
             let mut tail = match JournalTail::new(config) {
                 Ok(tail) => {
-                    println!("DEBUG: JournalTail created successfully");
                     tail
                 },
                 Err(e) => {
-                    println!("DEBUG: JournalTail creation failed: {}", e);
                     let _ = tx.send(Err(e));
                     return;
                 }
             };
             
             // Iterate over journal entries
-            println!("DEBUG: Starting journal iteration...");
             for entry_result in tail.iter() {
-                println!("DEBUG: Got entry result: {:?}", entry_result.is_ok());
                 match entry_result {
                     Ok(entry) => {
-                        println!("DEBUG: Sending entry: {}", entry.message);
                         if let Err(_) = tx.send(Ok(entry)) {
                             // Channel closed, stop iteration
                             break;

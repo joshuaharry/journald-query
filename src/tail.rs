@@ -1,10 +1,11 @@
 use crate::error::{JournalError, Result};
-use crate::ffi::{self, wait_result};
+use crate::ffi;
 use crate::query::Entry;
 use std::ffi::CString;
 use std::marker::PhantomData;
 use std::os::raw::c_void;
 use std::ptr;
+use std::time::Duration;
 
 /// Configuration for tailing journal entries from a specific service
 #[derive(Debug, Clone, PartialEq)]
@@ -15,14 +16,17 @@ pub struct TailConfig {
     pub service: String,
     /// Path to journal directory 
     pub journal_path: String,
+    /// Polling interval for checking new entries (default: 100ms)
+    pub poll_interval: Duration,
 }
 
 impl TailConfig {
-    /// Create a new tail configuration
+    /// Create a new tail configuration with default polling interval (100ms)
     /// 
     /// # Arguments
     /// * `hostname` - The hostname to filter journal entries by
     /// * `service` - The systemd service/unit name to filter by
+    /// * `journal_path` - Path to the journal directory
     /// 
     /// # Examples
     /// ```
@@ -35,7 +39,43 @@ impl TailConfig {
             hostname: hostname.into(),
             service: service.into(),
             journal_path: journal_path.into(),
+            poll_interval: Duration::from_millis(100), // Default 100ms polling
         }
+    }
+
+    /// Set a custom polling interval
+    /// 
+    /// # Arguments
+    /// * `interval` - Duration between polls for new journal entries
+    /// 
+    /// # Examples
+    /// ```
+    /// use journald_query::tail::TailConfig;
+    /// use std::time::Duration;
+    /// 
+    /// let config = TailConfig::new("web-server-01", "nginx.service", "/var/log/journal")
+    ///     .with_poll_interval(Duration::from_millis(50)); // 50ms for higher responsiveness
+    /// ```
+    pub fn with_poll_interval(mut self, interval: Duration) -> Self {
+        self.poll_interval = interval;
+        self
+    }
+
+    /// Set polling interval in milliseconds (convenience method)
+    /// 
+    /// # Arguments
+    /// * `millis` - Polling interval in milliseconds
+    /// 
+    /// # Examples
+    /// ```
+    /// use journald_query::tail::TailConfig;
+    /// 
+    /// let config = TailConfig::new("web-server-01", "nginx.service", "/var/log/journal")
+    ///     .with_poll_interval_ms(250); // 250ms polling
+    /// ```
+    pub fn with_poll_interval_ms(mut self, millis: u64) -> Self {
+        self.poll_interval = Duration::from_millis(millis);
+        self
     }
 }
 
@@ -172,7 +212,8 @@ impl JournalTail {
     }
     
     fn seek_to_tail(&mut self) -> Result<()> {
-        // First seek to recent time (last 10 seconds) to avoid missing entries
+        // For live tailing, we want to start from recent entries, not the very end
+        // Seek to 10 seconds ago to catch recent entries and then move forward
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -187,39 +228,29 @@ impl JournalTail {
             return Err(JournalError::from_errno(result));
         }
         
-        // Now seek to tail to get to the end
-        let result = unsafe { ffi::sd_journal_seek_tail(self.handle) };
+        // Move to the first entry at or after this time
+        let result = unsafe { ffi::sd_journal_next(self.handle) };
         
         if result < 0 {
             Err(JournalError::from_errno(result))
         } else {
+            // Position is now set, ready for iteration
             Ok(())
         }
     }
     
-    /// Wait for new journal entries (blocking)
+    /// Wait for new journal entries using polling approach
     /// 
-    /// This will block until new entries are available or an error occurs.
-    /// Uses infinite timeout to wait indefinitely.
-    fn wait_for_entries(&mut self) -> Result<()> {
-        let result = unsafe {
-            ffi::sd_journal_wait(self.handle, u64::MAX) // Infinite timeout
-        };
+    /// This uses a simple polling approach with sleep instead of sd_journal_wait()
+    /// which hangs indefinitely. The polling interval is configurable via TailConfig.
+    fn wait_for_entries_polling(&mut self) -> Result<()> {
+        // Use the configured polling interval
+        let poll_interval = self.config.poll_interval;
         
-        match result {
-            r if r == wait_result::SD_JOURNAL_APPEND => Ok(()),
-            r if r == wait_result::SD_JOURNAL_INVALIDATE => {
-                // Journal was rotated/invalidated, but we can continue
-                Ok(())
-            }
-            r if r == wait_result::SD_JOURNAL_NOP => {
-                // No changes, but this shouldn't happen with infinite timeout
-                // Try again
-                self.wait_for_entries()
-            }
-            r if r < 0 => Err(JournalError::from_errno(r)),
-            _ => Err(JournalError::Unknown(result)),
-        }
+        // Simple approach: just sleep and let the caller try again
+        // This avoids complex journal position management
+        std::thread::sleep(poll_interval);
+        Ok(())
     }
     
     /// Get the current journal entry
@@ -326,14 +357,14 @@ impl<'a> Iterator for JournalIterator<'a> {
                     return Some(self.tail.get_current_entry());
                 }
                 0 => {
-                    // No more entries, wait for new ones
-                    match self.tail.wait_for_entries() {
+                    // No more entries, wait for new ones using polling approach
+                    match self.tail.wait_for_entries_polling() {
                         Ok(()) => {
-                            // New entries available, continue the loop to get them
+                            // New entries should be available, continue the loop to get them
                             continue;
                         }
                         Err(e) => {
-                            // Error waiting, return it
+                            // Error waiting for entries, return it
                             return Some(Err(e));
                         }
                     }
