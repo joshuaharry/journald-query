@@ -1,15 +1,12 @@
+mod discover;
+mod query;
+mod tail;
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+// Core FFI bindings and types
+mod ffi;
+mod journal;
+mod error;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use journal::Journal;
+pub use error::{JournalError, Result};
+pub use discover::{discover_hosts, discover_units, discover_hosts_and_units};
