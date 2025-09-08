@@ -1,0 +1,24 @@
+[Unit]
+Description=Journald Query Demo Service
+Documentation=https://github.com/your-repo/journald-query
+After=network.target
+
+[Service]
+Type=simple
+User=josh
+WorkingDirectory=/home/josh/journald-query/demo_service
+ExecStart=/usr/bin/python3 /home/josh/journald-query/demo_service/service.py
+Restart=always
+RestartSec=5
+
+# Ensure logs go to systemd journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=demo-web-server
+
+# Set some environment variables for fun
+Environment=SERVICE_NAME=nginx.service
+Environment=HOSTNAME_OVERRIDE=web-server
+
+[Install]
+WantedBy=multi-user.target

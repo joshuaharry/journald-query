@@ -30,3 +30,7 @@ libsystemd = ">=240"
 [[example]]
 name = "discover_services"
 path = "examples/discover_services.rs"
+
+[[example]]
+name = "sse"
+path = "examples/sse.rs"

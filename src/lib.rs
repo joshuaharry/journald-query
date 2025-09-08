@@ -1,11 +1,11 @@
-mod discover;
-mod query;
-mod tail;
+pub mod discover;
+pub mod query;
+pub mod tail;
 
 // Core FFI bindings and types
 mod ffi;
 mod journal;
-mod error;
+pub mod error;
 
 pub use journal::Journal;
 pub use error::{JournalError, Result};

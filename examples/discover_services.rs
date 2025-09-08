@@ -1,15 +1,15 @@
-use journald_query::{Journal, JournalError, Host, Hosts};
+use journald_query::{discover_services, JournalError};
 
 fn main() -> Result<(), JournalError> {
-    // Use a single test journal file for clear demonstration
-    let test_file = "test_journald_files/multi_host.journal";
+    // Use the test journal directory
+    let test_journal_dir = "test_journal_dir";
     
-    println!("🔍 Discovering services from test journal file...");
-    println!("📁 Using file: {}", test_file);
+    println!("🔍 Discovering services from test journal directory...");
+    println!("📁 Using directory: {}", test_journal_dir);
     println!();
     
-    // Discover services using our test file
-    let services = discover_services_from_files(vec![test_file])?;
+    // Discover services using the actual API
+    let services = discover_services(test_journal_dir)?;
     
     println!("🔍 Discovered {} hosts with their services:", services.len());
     println!();
@@ -44,55 +44,24 @@ fn main() -> Result<(), JournalError> {
         println!("   • localhost has {} services", host.units.len());
     }
     
-    Ok(())
-}
-
-/// Discover services from specific journal files (similar to discover_services but for files)
-fn discover_services_from_files<P: AsRef<std::path::Path>>(file_paths: Vec<P>) -> Result<Hosts, JournalError> {
-    use std::collections::{HashMap, HashSet};
+    // Show some example hosts from our test data
+    println!("\n🔍 Looking for specific test hosts:");
+    let test_hosts = ["web-server", "database-server", "monitoring-server"];
     
-    let journal = Journal::open_files(file_paths)?;
-    
-    // Since sd_journal_query_unique ignores match filters (per systemd docs),
-    // we need to iterate through entries manually to correlate hosts with units
-    let mut host_units: HashMap<String, HashSet<String>> = HashMap::new();
-    
-    // Clear any existing matches and iterate through all entries
-    journal.flush_matches();
-    journal.seek_head()?;
-    
-    while journal.next()? {
-        // Get hostname and unit from current entry
-        let hostname = journal.get_field("_HOSTNAME")?;
-        let unit = journal.get_field("_SYSTEMD_UNIT")?;
-        
-        if let (Some(hostname_raw), Some(unit_raw)) = (hostname, unit) {
-            // Extract the actual values (remove field name prefixes)
-            if let Some(hostname) = hostname_raw.strip_prefix("_HOSTNAME=") {
-                if let Some(unit) = unit_raw.strip_prefix("_SYSTEMD_UNIT=") {
-                    host_units
-                        .entry(hostname.to_string())
-                        .or_insert_with(HashSet::new)
-                        .insert(unit.to_string());
-                }
+    for test_host in &test_hosts {
+        if let Some(host) = services.find_host(test_host) {
+            println!("   ✓ Found {}: {} services", test_host, host.units.len());
+            // Show first few services for this host
+            for (i, unit) in host.units.iter().take(3).enumerate() {
+                println!("     {}. {}", i + 1, unit);
             }
+            if host.units.len() > 3 {
+                println!("     ... and {} more", host.units.len() - 3);
+            }
+        } else {
+            println!("   ✗ {} not found", test_host);
         }
     }
     
-    // Convert to our Host/Hosts structure
-    let mut hosts = Vec::new();
-    for (hostname, units_set) in host_units {
-        let mut units: Vec<String> = units_set.into_iter().collect();
-        units.sort(); // Sort for consistent output
-        
-        hosts.push(Host {
-            hostname,
-            units,
-        });
-    }
-    
-    // Sort hosts by hostname for consistent output
-    hosts.sort_by(|a, b| a.hostname.cmp(&b.hostname));
-    
-    Ok(Hosts { hosts })
+    Ok(())
 }

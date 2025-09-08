@@ -1,7 +1,7 @@
-use std::time::Instant;
 use std::fs;
+use std::sync::Arc;
+use std::collections::HashMap;
 
-use futures_util::StreamExt;
 use journald_query::{TailConfig, JournalTail};
 use poem::{
     get, handler,
@@ -14,6 +14,7 @@ use poem::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::time::Duration;
+use tokio::sync::{broadcast, RwLock};
 
 #[derive(Deserialize)]
 struct LogsQuery {
@@ -22,7 +23,7 @@ struct LogsQuery {
 }
 
 /// Serializable wrapper for journal entries (for SSE/JSON output)
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct SerializableEntry {
     hostname: Option<String>,
     unit: Option<String>,
@@ -41,6 +42,100 @@ impl From<journald_query::Entry> for SerializableEntry {
     }
 }
 
+/// Key for identifying unique journal streams
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct StreamKey {
+    hostname: String,
+    service: String,
+}
+
+/// Shared journal reader that multiplexes to multiple connections
+struct JournalMultiplexer {
+    streams: Arc<RwLock<HashMap<StreamKey, broadcast::Sender<SerializableEntry>>>>,
+    machine_id: String,
+}
+
+impl JournalMultiplexer {
+    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let machine_id = fs::read_to_string("/etc/machine-id")?
+            .trim()
+            .to_string();
+        
+        Ok(Self {
+            streams: Arc::new(RwLock::new(HashMap::new())),
+            machine_id,
+        })
+    }
+    
+    /// Get or create a broadcast channel for a specific hostname/service combination
+    async fn get_or_create_stream(&self, key: StreamKey) -> broadcast::Receiver<SerializableEntry> {
+        let mut streams = self.streams.write().await;
+        
+        if let Some(sender) = streams.get(&key) {
+            // Stream already exists, return a new receiver
+            return sender.subscribe();
+        }
+        
+        // Create new stream
+        let (tx, rx) = broadcast::channel(1000); // Buffer up to 1000 entries
+        streams.insert(key.clone(), tx.clone());
+        
+        // Spawn a single background task for this hostname/service combination
+        let journal_path = format!("/var/log/journal/{}", self.machine_id);
+        let streams_ref = Arc::clone(&self.streams);
+        
+        tokio::task::spawn_blocking(move || {
+            let config = TailConfig::new(&key.hostname, &key.service, &journal_path)
+                .with_poll_interval_ms(100);
+            
+            let mut tail = match JournalTail::new(config) {
+                Ok(tail) => tail,
+                Err(e) => {
+                    eprintln!("Failed to create journal tail for {:?}: {}", key, e);
+                    return;
+                }
+            };
+            
+            // Read journal entries and broadcast to all subscribers
+            for entry_result in tail.iter() {
+                match entry_result {
+                    Ok(entry) => {
+                        let serializable = SerializableEntry::from(entry);
+                        
+                        // Send to all subscribers (non-blocking)
+                        if tx.send(serializable).is_err() {
+                            // No more subscribers, clean up
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Journal error for {:?}: {}", key, e);
+                        break;
+                    }
+                }
+            }
+            
+            // Clean up when done
+            tokio::spawn(async move {
+                let mut streams = streams_ref.write().await;
+                streams.remove(&key);
+                println!("Cleaned up stream for {:?}", key);
+            });
+        });
+        
+        rx
+    }
+}
+
+// Global multiplexer instance
+static MULTIPLEXER: tokio::sync::OnceCell<JournalMultiplexer> = tokio::sync::OnceCell::const_new();
+
+async fn get_multiplexer() -> &'static JournalMultiplexer {
+    MULTIPLEXER.get_or_init(|| async {
+        JournalMultiplexer::new().expect("Failed to create multiplexer")
+    }).await
+}
+
 #[handler]
 fn index() -> Html<&'static str> {
     Html(
@@ -48,9 +143,16 @@ fn index() -> Html<&'static str> {
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Live Journal Stream</title>
+            <title>Production-Ready Live Journal Stream</title>
             <style>
                 body { font-family: monospace; margin: 20px; }
+                .section { 
+                    margin-bottom: 30px; 
+                    padding: 15px; 
+                    border: 1px solid #ddd; 
+                    border-radius: 5px;
+                    background: #fafafa;
+                }
                 .log-entry { 
                     margin: 5px 0; 
                     padding: 5px; 
@@ -62,22 +164,44 @@ fn index() -> Html<&'static str> {
                 .service { color: #cc6600; }
                 .message { color: #000; }
                 .controls { margin-bottom: 20px; }
+                .status { margin: 10px 0; padding: 10px; background: #e8f4fd; border-radius: 3px; }
                 input, button { margin: 5px; padding: 5px; }
             </style>
         </head>
         <body>
-            <h1>Live Journal Stream</h1>
-            <div class="controls">
-                <input type="text" id="hostname" placeholder="Hostname (e.g., demo-web-server)" value="sdjournal-rs">
-                <input type="text" id="service" placeholder="Service (e.g., journald-demo.service)" value="journald-demo.service">
-                <button onclick="startStream()">Start Stream</button>
-                <button onclick="stopStream()">Stop Stream</button>
-                <button onclick="clearLogs()">Clear</button>
+            <h1>Production-Ready Live Journal Stream</h1>
+            <div class="status">
+                <strong>Production Features:</strong>
+                ✅ Shared journal readers (no thread-per-connection)<br>
+                ✅ Connection multiplexing with broadcast channels<br>
+                ✅ Automatic cleanup when connections close<br>
+                ✅ Bounded memory usage with buffered channels<br>
             </div>
+            
+            <div class="section">
+                <h2>Live Stream</h2>
+                <div class="controls">
+                    <input type="text" id="hostname" placeholder="Hostname" value="sdjournal-rs">
+                    <input type="text" id="service" placeholder="Service" value="journald-demo.service">
+                    <button onclick="startStream()">Start Stream</button>
+                    <button onclick="stopStream()">Stop Stream</button>
+                    <button onclick="clearLogs()">Clear</button>
+                </div>
+                <div id="connection-status"></div>
+            </div>
+            
             <div id="logs"></div>
             
             <script>
                 let eventSource = null;
+                let connectionCount = 0;
+                
+                function updateStatus(message, type = 'info') {
+                    const status = document.getElementById('connection-status');
+                    status.innerHTML = `<strong>Status:</strong> ${message}`;
+                    status.style.background = type === 'error' ? '#f8d7da' : '#d4edda';
+                    status.style.color = type === 'error' ? '#721c24' : '#155724';
+                }
                 
                 function startStream() {
                     if (eventSource) {
@@ -92,11 +216,14 @@ fn index() -> Html<&'static str> {
                         return;
                     }
                     
+                    connectionCount++;
+                    updateStatus(`Connecting... (Connection #${connectionCount})`);
+                    
                     const url = `/logs?hostname=${encodeURIComponent(hostname)}&service=${encodeURIComponent(service)}`;
                     eventSource = new EventSource(url);
                     
                     eventSource.onopen = function() {
-                        console.log('Stream opened');
+                        updateStatus(`Connected to ${hostname}/${service} (Connection #${connectionCount})`);
                     };
                     
                     eventSource.onmessage = function(event) {
@@ -104,14 +231,12 @@ fn index() -> Html<&'static str> {
                             const entry = JSON.parse(event.data);
                             displayLogEntry(entry);
                         } catch (e) {
-                            // Handle non-JSON messages (like errors)
                             displayError(event.data);
                         }
                     };
                     
                     eventSource.onerror = function(event) {
-                        console.error('Stream error:', event);
-                        displayError('Connection error occurred');
+                        updateStatus('Connection error occurred', 'error');
                     };
                 }
                 
@@ -119,8 +244,8 @@ fn index() -> Html<&'static str> {
                     if (eventSource) {
                         eventSource.close();
                         eventSource = null;
+                        updateStatus('Disconnected');
                     }
-                    console.log('Stream closed');
                 }
                 
                 function clearLogs() {
@@ -142,6 +267,11 @@ fn index() -> Html<&'static str> {
                     
                     logs.appendChild(div);
                     logs.scrollTop = logs.scrollHeight;
+                    
+                    // Limit log entries to prevent memory issues
+                    if (logs.children.length > 1000) {
+                        logs.removeChild(logs.firstChild);
+                    }
                 }
                 
                 function displayError(message) {
@@ -161,84 +291,27 @@ fn index() -> Html<&'static str> {
 
 #[handler]
 async fn logs(Query(params): Query<LogsQuery>) -> Result<SSE, poem::Error> {
-    // Get the machine ID to construct the correct journal path
-    let machine_id = fs::read_to_string("/etc/machine-id")
-        .map_err(|e| poem::Error::from_string(format!("Failed to read machine ID: {}", e), poem::http::StatusCode::INTERNAL_SERVER_ERROR))?
-        .trim()
-        .to_string();
+    let multiplexer = get_multiplexer().await;
     
-    let journal_path = format!("/var/log/journal/{}", machine_id);
+    let key = StreamKey {
+        hostname: params.hostname,
+        service: params.service,
+    };
     
-    // Create tail configuration - use system journal for live demo
-    let config = TailConfig::new(&params.hostname, &params.service, &journal_path);
+    // Get a receiver for this hostname/service combination
+    let mut rx = multiplexer.get_or_create_stream(key).await;
     
-    // Convert the blocking iterator to an async stream
+    // Create async stream from broadcast receiver
     let stream = async_stream::stream! {
-        // Move the config to a thread pool for blocking operations
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        
-        // Spawn blocking task to handle journal iteration
-        let _handle = tokio::task::spawn_blocking(move || {
-            // Create the journal tail inside the blocking task
-            let mut tail = match JournalTail::new(config) {
-                Ok(tail) => {
-                    tail
-                },
-                Err(e) => {
-                    let _ = tx.send(Err(e));
-                    return;
-                }
-            };
-            
-            // Iterate over journal entries
-            for entry_result in tail.iter() {
-                match entry_result {
-                    Ok(entry) => {
-                        if let Err(_) = tx.send(Ok(entry)) {
-                            // Channel closed, stop iteration
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        if let Err(_) = tx.send(Err(e)) {
-                            // Channel closed, stop iteration
-                            break;
-                        }
-                    }
-                }
-            }
-        });
-        
-        // Yield entries from the channel
-        while let Some(result) = rx.recv().await {
-            match result {
-                Ok(entry) => {
-                    let serialized_entry = SerializableEntry::from(entry);
-                    // Serialize entry to JSON
-                    match serde_json::to_string(&serialized_entry) {
-                        Ok(json) => yield Event::message(json),
-                        Err(e) => yield Event::message(format!("Serialization error: {}", e)),
-                    }
-                }
-                Err(e) => {
-                    yield Event::message(format!("Journal error: {}", e));
-                }
+        while let Ok(entry) = rx.recv().await {
+            match serde_json::to_string(&entry) {
+                Ok(json) => yield Event::message(json),
+                Err(e) => yield Event::message(format!("Serialization error: {}", e)),
             }
         }
     };
     
     Ok(SSE::new(stream).keep_alive(Duration::from_secs(30)))
-}
-
-// Keep the old demo event handler for testing
-#[handler]
-fn demo_event() -> SSE {
-    let now = Instant::now();
-    SSE::new(
-        tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(Duration::from_secs(1)))
-            .map(move |_| Event::message(now.elapsed().as_secs().to_string())),
-    )
-    .keep_alive(Duration::from_secs(5))
 }
 
 #[tokio::main]
@@ -249,14 +322,9 @@ async fn main() -> Result<(), std::io::Error> {
 
     let app = Route::new()
         .at("/", get(index))
-        .at("/logs", get(logs))
-        .at("/demo", get(demo_event));
+        .at("/logs", get(logs));
         
-    println!("Server starting at http://0.0.0.0:3000");
-    println!("Open your browser and go to http://localhost:3000");
-    println!("Try hostname: demo-web-server, service: journald-demo.service");
-    println!("(Make sure to run ./demo_service/install.sh first!)");
-    
+    println!("Server running on http://localhost:3000");
     Server::new(TcpListener::bind("0.0.0.0:3000"))
         .run(app)
         .await

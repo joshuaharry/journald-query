@@ -939,3 +939,123 @@ fn test_tail_api_ergonomics() {
     
     println!("Method chaining works as expected");
 }
+
+#[test]
+fn test_tail_config_new_features() {
+    use std::time::Duration;
+    
+    // Test new configurable polling interval
+    let config_fast = TailConfig::new("host", "service", "/path")
+        .with_poll_interval_ms(50);
+    assert_eq!(config_fast.poll_interval, Duration::from_millis(50));
+    
+    let config_slow = TailConfig::new("host", "service", "/path")
+        .with_poll_interval_ms(500);
+    assert_eq!(config_slow.poll_interval, Duration::from_millis(500));
+    
+    // Test new configurable start time offset
+    let config_recent = TailConfig::new("host", "service", "/path")
+        .with_start_time_offset_secs(30);
+    assert_eq!(config_recent.start_time_offset, Duration::from_secs(30));
+    
+    let config_historical = TailConfig::new("host", "service", "/path")
+        .with_start_time_offset_secs(3600);
+    assert_eq!(config_historical.start_time_offset, Duration::from_secs(3600));
+    
+    // Test from_now() convenience method
+    let config_realtime = TailConfig::new("host", "service", "/path")
+        .from_now();
+    assert_eq!(config_realtime.start_time_offset, Duration::ZERO);
+    
+    // Test method chaining with new features
+    let config_combined = TailConfig::new("web-server", "nginx.service", "/var/log/journal")
+        .with_poll_interval_ms(75)
+        .with_start_time_offset_secs(120);
+    
+    assert_eq!(config_combined.hostname, "web-server");
+    assert_eq!(config_combined.service, "nginx.service");
+    assert_eq!(config_combined.journal_path, "/var/log/journal");
+    assert_eq!(config_combined.poll_interval, Duration::from_millis(75));
+    assert_eq!(config_combined.start_time_offset, Duration::from_secs(120));
+}
+
+
+#[test]
+fn test_tail_config_use_case_scenarios() {
+    use std::time::Duration;
+    
+    // Test realistic use case configurations
+    
+    // Dashboard monitoring - fast updates, recent history
+    let dashboard_config = TailConfig::new("web-server", "nginx.service", "/var/log/journal")
+        .with_poll_interval_ms(50)
+        .with_start_time_offset_secs(60);
+    
+    assert_eq!(dashboard_config.poll_interval, Duration::from_millis(50));
+    assert_eq!(dashboard_config.start_time_offset, Duration::from_secs(60));
+    
+    // Background monitoring - slower updates, longer history
+    let background_config = TailConfig::new("db-server", "postgres.service", "/var/log/journal")
+        .with_poll_interval_ms(300)
+        .with_start_time_offset_secs(600);
+    
+    assert_eq!(background_config.poll_interval, Duration::from_millis(300));
+    assert_eq!(background_config.start_time_offset, Duration::from_secs(600));
+    
+    // Real-time alerting - very fast updates, no history
+    let alerting_config = TailConfig::new("alert-server", "monitor.service", "/var/log/journal")
+        .with_poll_interval_ms(25)
+        .from_now();
+    
+    assert_eq!(alerting_config.poll_interval, Duration::from_millis(25));
+    assert_eq!(alerting_config.start_time_offset, Duration::ZERO);
+    
+    // Investigation mode - normal updates, long history
+    let investigation_config = TailConfig::new("problem-server", "failing.service", "/var/log/journal")
+        .with_start_time_offset_secs(3600) // 1 hour ago
+        .with_poll_interval_ms(100);
+    
+    assert_eq!(investigation_config.start_time_offset, Duration::from_secs(3600));
+    assert_eq!(investigation_config.poll_interval, Duration::from_millis(100));
+    
+    println!("✅ Use case scenario configurations work correctly");
+}
+
+#[test]
+fn test_tail_config_method_chaining_flexibility() {
+    use std::time::Duration;
+    
+    // Test that method chaining works in any order
+    let config1 = TailConfig::new("host", "service", "/path")
+        .with_poll_interval_ms(150)
+        .with_start_time_offset_secs(45);
+    
+    let config2 = TailConfig::new("host", "service", "/path")
+        .with_start_time_offset_secs(45)
+        .with_poll_interval_ms(150);
+    
+    assert_eq!(config1.poll_interval, config2.poll_interval);
+    assert_eq!(config1.start_time_offset, config2.start_time_offset);
+    
+    // Test mixing Duration and convenience methods
+    let config3 = TailConfig::new("host", "service", "/path")
+        .with_poll_interval(Duration::from_millis(200))
+        .with_start_time_offset_secs(90);
+    
+    let config4 = TailConfig::new("host", "service", "/path")
+        .with_poll_interval_ms(200)
+        .with_start_time_offset(Duration::from_secs(90));
+    
+    assert_eq!(config3.poll_interval, config4.poll_interval);
+    assert_eq!(config3.start_time_offset, config4.start_time_offset);
+    
+    // Test that values can be overridden
+    let config5 = TailConfig::new("host", "service", "/path")
+        .with_poll_interval_ms(100)
+        .with_poll_interval_ms(300) // Override
+        .with_start_time_offset_secs(30)
+        .with_start_time_offset_secs(60); // Override
+    
+    assert_eq!(config5.poll_interval, Duration::from_millis(300));
+    assert_eq!(config5.start_time_offset, Duration::from_secs(60));
+}

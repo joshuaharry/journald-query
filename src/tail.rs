@@ -18,10 +18,16 @@ pub struct TailConfig {
     pub journal_path: String,
     /// Polling interval for checking new entries (default: 100ms)
     pub poll_interval: Duration,
+    /// How far back in time to start reading entries (default: 10 seconds ago)
+    pub start_time_offset: Duration,
 }
 
 impl TailConfig {
-    /// Create a new tail configuration with default polling interval (100ms)
+    /// Create a new tail configuration with default settings
+    /// 
+    /// Defaults:
+    /// - Polling interval: 100ms
+    /// - Start time offset: 10 seconds ago
     /// 
     /// # Arguments
     /// * `hostname` - The hostname to filter journal entries by
@@ -40,6 +46,7 @@ impl TailConfig {
             service: service.into(),
             journal_path: journal_path.into(),
             poll_interval: Duration::from_millis(100), // Default 100ms polling
+            start_time_offset: Duration::from_secs(10), // Default 10 seconds ago
         }
     }
 
@@ -77,6 +84,68 @@ impl TailConfig {
         self.poll_interval = Duration::from_millis(millis);
         self
     }
+
+    /// Set how far back in time to start reading entries
+    /// 
+    /// # Arguments
+    /// * `offset` - Duration to go back in time from now
+    /// 
+    /// # Examples
+    /// ```
+    /// use journald_query::tail::TailConfig;
+    /// use std::time::Duration;
+    /// 
+    /// // Start from 5 minutes ago
+    /// let config = TailConfig::new("web-server-01", "nginx.service", "/var/log/journal")
+    ///     .with_start_time_offset(Duration::from_secs(300));
+    /// 
+    /// // Start from 1 hour ago
+    /// let config = TailConfig::new("web-server-01", "nginx.service", "/var/log/journal")
+    ///     .with_start_time_offset(Duration::from_secs(3600));
+    /// ```
+    pub fn with_start_time_offset(mut self, offset: Duration) -> Self {
+        self.start_time_offset = offset;
+        self
+    }
+
+    /// Set start time offset in seconds (convenience method)
+    /// 
+    /// # Arguments
+    /// * `seconds` - Number of seconds to go back in time from now
+    /// 
+    /// # Examples
+    /// ```
+    /// use journald_query::tail::TailConfig;
+    /// 
+    /// // Start from 30 seconds ago
+    /// let config = TailConfig::new("web-server-01", "nginx.service", "/var/log/journal")
+    ///     .with_start_time_offset_secs(30);
+    /// 
+    /// // Start from 5 minutes ago
+    /// let config = TailConfig::new("web-server-01", "nginx.service", "/var/log/journal")
+    ///     .with_start_time_offset_secs(300);
+    /// ```
+    pub fn with_start_time_offset_secs(mut self, seconds: u64) -> Self {
+        self.start_time_offset = Duration::from_secs(seconds);
+        self
+    }
+
+    /// Start tailing from now (no historical entries)
+    /// 
+    /// This is equivalent to `with_start_time_offset(Duration::ZERO)` but more explicit.
+    /// 
+    /// # Examples
+    /// ```
+    /// use journald_query::tail::TailConfig;
+    /// 
+    /// // Only show new entries from this moment forward
+    /// let config = TailConfig::new("web-server-01", "nginx.service", "/var/log/journal")
+    ///     .from_now();
+    /// ```
+    pub fn from_now(mut self) -> Self {
+        self.start_time_offset = Duration::ZERO;
+        self
+    }
 }
 
 /// A live tail of journal entries for a specific hostname and service
@@ -111,7 +180,7 @@ impl JournalTail {
     /// use journald_query::tail::{TailConfig, JournalTail};
     /// 
     /// let config = TailConfig::new("web-server-01", "nginx.service", "/var/log/journal");
-    /// let tail = JournalTail::new(config)?;
+    /// let mut tail = JournalTail::new(config)?;
     /// 
     /// for entry in tail.iter() {
     ///     match entry {
@@ -212,16 +281,19 @@ impl JournalTail {
     }
     
     fn seek_to_tail(&mut self) -> Result<()> {
-        // For live tailing, we want to start from recent entries, not the very end
-        // Seek to 10 seconds ago to catch recent entries and then move forward
+        // For live tailing, we want to start from configurable time offset
+        // Use the configured start_time_offset to determine how far back to go
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_micros() as u64;
-        let ten_seconds_ago = now - (10 * 1_000_000); // 10 seconds in microseconds
+        
+        // Convert the offset to microseconds and subtract from now
+        let offset_micros = self.config.start_time_offset.as_micros() as u64;
+        let start_time = now.saturating_sub(offset_micros);
         
         let result = unsafe { 
-            ffi::sd_journal_seek_realtime_usec(self.handle, ten_seconds_ago)
+            ffi::sd_journal_seek_realtime_usec(self.handle, start_time)
         };
         
         if result < 0 {
@@ -241,8 +313,11 @@ impl JournalTail {
     
     /// Wait for new journal entries using polling approach
     /// 
-    /// This uses a simple polling approach with sleep instead of sd_journal_wait()
-    /// which hangs indefinitely. The polling interval is configurable via TailConfig.
+    /// You might be tempted to use sd_journal_wait() here. I would recommend against that
+    /// for two reasons:
+    /// 1. It only captures changes every 250ms - see:
+    /// https://github.com/systemd/systemd/issues/17574
+    /// 2. It can hang indefinitely for reasons I don't completely understand.
     fn wait_for_entries_polling(&mut self) -> Result<()> {
         // Use the configured polling interval
         let poll_interval = self.config.poll_interval;
@@ -379,5 +454,194 @@ impl<'a> Iterator for JournalIterator<'a> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_tail_config_defaults() {
+        let config = TailConfig::new("test-host", "test.service", "/test/path");
+        
+        assert_eq!(config.hostname, "test-host");
+        assert_eq!(config.service, "test.service");
+        assert_eq!(config.journal_path, "/test/path");
+        assert_eq!(config.poll_interval, Duration::from_millis(100));
+        assert_eq!(config.start_time_offset, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn test_tail_config_with_poll_interval() {
+        let config = TailConfig::new("host", "service", "/path")
+            .with_poll_interval(Duration::from_millis(250));
+        
+        assert_eq!(config.poll_interval, Duration::from_millis(250));
+        // Other fields should remain unchanged
+        assert_eq!(config.start_time_offset, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn test_tail_config_with_poll_interval_ms() {
+        let config = TailConfig::new("host", "service", "/path")
+            .with_poll_interval_ms(500);
+        
+        assert_eq!(config.poll_interval, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_tail_config_with_start_time_offset() {
+        let config = TailConfig::new("host", "service", "/path")
+            .with_start_time_offset(Duration::from_secs(60));
+        
+        assert_eq!(config.start_time_offset, Duration::from_secs(60));
+        // Other fields should remain unchanged
+        assert_eq!(config.poll_interval, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_tail_config_with_start_time_offset_secs() {
+        let config = TailConfig::new("host", "service", "/path")
+            .with_start_time_offset_secs(300);
+        
+        assert_eq!(config.start_time_offset, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn test_tail_config_from_now() {
+        let config = TailConfig::new("host", "service", "/path")
+            .from_now();
+        
+        assert_eq!(config.start_time_offset, Duration::ZERO);
+    }
+
+    #[test]
+    fn test_tail_config_method_chaining() {
+        let config = TailConfig::new("web-server", "nginx.service", "/var/log/journal")
+            .with_poll_interval_ms(50)
+            .with_start_time_offset_secs(30);
+        
+        assert_eq!(config.hostname, "web-server");
+        assert_eq!(config.service, "nginx.service");
+        assert_eq!(config.journal_path, "/var/log/journal");
+        assert_eq!(config.poll_interval, Duration::from_millis(50));
+        assert_eq!(config.start_time_offset, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_tail_config_chaining_order_independence() {
+        let config1 = TailConfig::new("host", "service", "/path")
+            .with_poll_interval_ms(200)
+            .with_start_time_offset_secs(60);
+        
+        let config2 = TailConfig::new("host", "service", "/path")
+            .with_start_time_offset_secs(60)
+            .with_poll_interval_ms(200);
+        
+        assert_eq!(config1.poll_interval, config2.poll_interval);
+        assert_eq!(config1.start_time_offset, config2.start_time_offset);
+    }
+
+    #[test]
+    fn test_tail_config_overriding_values() {
+        let config = TailConfig::new("host", "service", "/path")
+            .with_poll_interval_ms(100)
+            .with_poll_interval_ms(200) // Override previous value
+            .with_start_time_offset_secs(10)
+            .with_start_time_offset_secs(20); // Override previous value
+        
+        assert_eq!(config.poll_interval, Duration::from_millis(200));
+        assert_eq!(config.start_time_offset, Duration::from_secs(20));
+    }
+
+    #[test]
+    fn test_tail_config_extreme_values() {
+        // Test very small values
+        let config_small = TailConfig::new("host", "service", "/path")
+            .with_poll_interval_ms(1)
+            .with_start_time_offset_secs(0);
+        
+        assert_eq!(config_small.poll_interval, Duration::from_millis(1));
+        assert_eq!(config_small.start_time_offset, Duration::ZERO);
+        
+        // Test large values
+        let config_large = TailConfig::new("host", "service", "/path")
+            .with_poll_interval_ms(60000) // 1 minute
+            .with_start_time_offset_secs(3600); // 1 hour
+        
+        assert_eq!(config_large.poll_interval, Duration::from_secs(60));
+        assert_eq!(config_large.start_time_offset, Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn test_tail_config_string_conversions() {
+        // Test that Into<String> works for all string parameters
+        let config = TailConfig::new(
+            "hostname".to_string(),
+            "service.service".to_string(), 
+            "/path/to/journal".to_string()
+        );
+        
+        assert_eq!(config.hostname, "hostname");
+        assert_eq!(config.service, "service.service");
+        assert_eq!(config.journal_path, "/path/to/journal");
+    }
+
+    #[test]
+    fn test_tail_config_clone_and_debug() {
+        let config = TailConfig::new("host", "service", "/path")
+            .with_poll_interval_ms(150)
+            .with_start_time_offset_secs(45);
+        
+        // Test Clone
+        let cloned = config.clone();
+        assert_eq!(config, cloned);
+        
+        // Test Debug
+        let debug_str = format!("{:?}", config);
+        assert!(debug_str.contains("host"));
+        assert!(debug_str.contains("service"));
+        assert!(debug_str.contains("/path"));
+        assert!(debug_str.contains("150ms"));
+        assert!(debug_str.contains("45s"));
+    }
+
+    #[test]
+    fn test_tail_config_use_cases() {
+        // Test common use case configurations
+        
+        // High-frequency monitoring (dashboards)
+        let dashboard_config = TailConfig::new("web-server", "nginx.service", "/var/log/journal")
+            .with_poll_interval_ms(50)
+            .with_start_time_offset_secs(60);
+        
+        assert_eq!(dashboard_config.poll_interval, Duration::from_millis(50));
+        assert_eq!(dashboard_config.start_time_offset, Duration::from_secs(60));
+        
+        // Low-frequency monitoring (background services)
+        let background_config = TailConfig::new("db-server", "postgres.service", "/var/log/journal")
+            .with_poll_interval_ms(500)
+            .with_start_time_offset_secs(300);
+        
+        assert_eq!(background_config.poll_interval, Duration::from_millis(500));
+        assert_eq!(background_config.start_time_offset, Duration::from_secs(300));
+        
+        // Real-time only (alerting)
+        let realtime_config = TailConfig::new("alert-server", "monitor.service", "/var/log/journal")
+            .from_now()
+            .with_poll_interval_ms(25);
+        
+        assert_eq!(realtime_config.poll_interval, Duration::from_millis(25));
+        assert_eq!(realtime_config.start_time_offset, Duration::ZERO);
+        
+        // Investigation mode (long history)
+        let investigation_config = TailConfig::new("problem-server", "failing.service", "/var/log/journal")
+            .with_start_time_offset_secs(3600) // 1 hour ago
+            .with_poll_interval_ms(100);
+        
+        assert_eq!(investigation_config.start_time_offset, Duration::from_secs(3600));
+        assert_eq!(investigation_config.poll_interval, Duration::from_millis(100));
     }
 }
