@@ -1,6 +1,6 @@
 [package]
 name = "journald-query"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Josh"]
 description = "Safe Rust bindings for systemd journal API"

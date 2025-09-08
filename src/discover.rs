@@ -1,7 +1,7 @@
 use crate::journal::Journal;
 use crate::error::Result;
 use std::path::Path;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// Represents a single host and its associated systemd units
 /// 
@@ -93,33 +93,49 @@ pub fn discover_services<P: AsRef<Path>>(journal_dir: P) -> Result<Hosts> {
     discover_services_from_journal(&journal)
 }
 
+/// Ideally we could use sd_journal_enumerate_entries with a couple of filters
+/// to get the results, but according to the API docs:
+/// 
+/// "Note that these functions currently are not influenced by matches set with sd_journal_add_match() but 
+/// this might change in a later version of this software."
+/// 
+/// As such, we have to instead:
+/// - Query to get all the unique hostnames
+/// - Query to get all the unique units
+/// - Check for each hostname+unit combination if it exists in the journal
+/// 
+/// This is... not great, but the best one can reasonably do with the API.
 fn discover_services_from_journal(journal: &Journal) -> Result<Hosts> {
-    // Since sd_journal_query_unique ignores match filters (per systemd docs),
-    // we need to iterate through entries manually to correlate hosts with units
-    let mut host_units: HashMap<String, HashSet<String>> = HashMap::new();
+    let hostname_values = journal.get_unique_values("_HOSTNAME")?;
+    let hostnames: HashSet<String> = hostname_values
+        .into_iter()
+        .filter_map(|value| value.strip_prefix("_HOSTNAME=").map(|s| s.to_string()))
+        .collect();
     
-    // Clear any existing matches and iterate through all entries
-    journal.flush_matches();
-    journal.seek_head()?;
+    let unit_values = journal.get_unique_values("_SYSTEMD_UNIT")?;
+    let units: HashSet<String> = unit_values
+        .into_iter()
+        .filter_map(|value| value.strip_prefix("_SYSTEMD_UNIT=").map(|s| s.to_string()))
+        .collect();
     
-    while journal.next()? {
-        // Get hostname and unit from current entry
-        let hostname = journal.get_field("_HOSTNAME")?;
-        let unit = journal.get_field("_SYSTEMD_UNIT")?;
-        
-        if let (Some(hostname_raw), Some(unit_raw)) = (hostname, unit) {
-            // Extract the actual values (remove field name prefixes)
-            if let Some(hostname) = hostname_raw.strip_prefix("_HOSTNAME=") {
-                if let Some(unit) = unit_raw.strip_prefix("_SYSTEMD_UNIT=") {
-                    host_units
-                        .entry(hostname.to_string())
-                        .or_insert_with(HashSet::new)
-                        .insert(unit.to_string());
-                }
+    let mut host_units: std::collections::HashMap<String, HashSet<String>> = std::collections::HashMap::new();
+    
+    for hostname in &hostnames {
+        let mut units_for_host = HashSet::new();
+        // For each unit, check if the hostname+unit combination exists
+        for unit in &units {
+            journal.flush_matches();
+            journal.add_match("_HOSTNAME", hostname)?;
+            journal.add_match("_SYSTEMD_UNIT", unit)?;
+            journal.seek_head()?;
+            if journal.next()? {
+                units_for_host.insert(unit.clone());
             }
         }
+        
+        host_units.insert(hostname.clone(), units_for_host);
     }
-
+    
     let mut hosts = Vec::new();
     for (hostname, units_set) in host_units {
         let mut units: Vec<String> = units_set.into_iter().collect();
